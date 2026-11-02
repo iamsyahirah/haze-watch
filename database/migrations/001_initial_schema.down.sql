@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS api_sync_logs;
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS alert_rules;
+DROP TABLE IF EXISTS favourite_locations;
+DROP TABLE IF EXISTS air_quality_readings;
+DROP TABLE IF EXISTS locations;
+DROP TABLE IF EXISTS data_sources;
+DROP TABLE IF EXISTS states;
+DROP TABLE IF EXISTS users;

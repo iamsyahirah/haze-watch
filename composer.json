@@ -5,6 +5,11 @@
     "require": {
         "php": ">=8.2"
     },
+    "scripts": {
+        "db:migrate": "@php database/console.php migrate",
+        "db:rollback": "@php database/console.php rollback",
+        "db:seed": "@php database/console.php seed"
+    },
     "autoload": {
         "psr-4": {
             "HazeWatch\\": "app/"
