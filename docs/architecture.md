@@ -100,18 +100,20 @@ The developer page documents a public, read-only API; no API key; JSON requests 
 
 The OpenAPI schema documents `/api/air-quality` and `/api/air-quality/history`. A current station object has `id`, `name`, `fullName`, `state`, `region`, `latitude`, `longitude`, `api`, `pm10Api`, `category`, `pollutant`, `observedAt`, and `isFallback`. The snapshot has `source`, `sourceUrl`, `fetchedAt`, `observedAt`, `stationCount`, `reportingCount`, and `stations`. History readings expose `observedAt`, `api`, and `pollutant`; archive points expose `observedAt`, `api`, `low`, `high`, and `count`.
 
-The live provider homepage observed during research listed 68/68 DOE stations reporting on 2 Nov 2026 and gave examples including JOHAN SETIA, Nilai, Klang, Shah Alam, Pasir Gudang, Cheras, Batu Muda, Petaling Jaya, Seremban, and Larkin. This is a snapshot, not a guaranteed enduring station roster. Do not seed the PRD's city names as stations. Import the actual station identifiers and reconcile the roster at setup/sync time.
+The live API was queried read-only on 3 Nov 2026 MYT. Its current response contained the documented snapshot keys and 68 stations, with `stationCount=68` and `reportingCount=68`. The first rows were `CA01R` (Kangar, Perlis) and `CA02K` (Langkawi, Kedah), each carrying coordinates, an `api` value, a category, `pollutant=PM2.5`, and an ISO observation time with `+08:00`. In this response `pm10Api` was null for all 68 stations. The actual station objects did not include `isFallback`, despite that field appearing as required in the published OpenAPI schema. The normalizer therefore does not depend on `isFallback`.
+
+The sampled API values were index values such as `41` and `34`; the pollutant text is not a PM2.5 concentration and no PM2.5 concentration or unit field was present. The documented recent-history operation, called with no query parameters, returned all 68 station IDs with hourly readings shaped as `{observedAt, api, pollutant}`; one example returned 24 hourly points. The `station=CA01R&range=month` response instead returned aggregate points shaped `{observedAt, api, low, high, count}`. These are API/IPU histories, not pollutant concentration series.
+
+Current, recent-history, and month-history responses returned `Cache-Control: public, s-maxage=300, stale-while-revalidate=...`, so the PHP client caches them for five minutes and does not use stale-while-revalidate as permission to poll again. The developer page states there is no contractual rate limit or uptime guarantee. Sanitized live current, recent-history, and month-history responses are retained under `tests/fixtures/` for deterministic adapter checks. This station roster is a snapshot, not a permanent list; synchronization upserts provider station IDs and does not seed guessed city names.
 
 ### Known limitation: unit and semantics confirmation
 
-The OpenAPI field names and types do **not** define units for `api` or `pm10Api`. The API field is presented by Haze Monitor as Malaysia's DOE API/IPU. The source names `pm10Api`, not a PM10 concentration field, so it must not be labelled PM10 µg/m³. The payload's `pollutant` identifies a driving pollutant where available but does not give a direct PM2.5 concentration. Thus HazeWatch can initially display official API/IPU and category faithfully; PM2.5/PM10 concentration cards require a documented concentration feed/field or separately approved derivation with methodology and labels. Do not infer units or convert API/IPU values into pollutant measurements.
-
-The live endpoint and schema are accessible, but the documentation browser used for this research did not render the raw JSON body or response headers from the endpoint. Before implementing ingestion, run one respectful GET from the development environment, capture the exact JSON and `Cache-Control`/`Retry-After` headers, and save a sanitized fixture with retrieval date. This completes the requested payload/header verification; until then no cache duration is assumed.
+The OpenAPI field names and types do **not** define units for `api` or `pm10Api`. The API field is presented by Haze Monitor as Malaysia's DOE API/IPU. In the sampled response, `pm10Api` was null across the station roster. The `pollutant` value indicates a driver but does not give a direct PM2.5 concentration. HazeWatch therefore stores `api` as `malaysia_api_ipu` with unit `index`, preserves the source metric/category, and omits missing values. PM2.5/PM10 concentration cards require a documented concentration feed/field or separately approved derivation with methodology and labels. Do not convert API/IPU values into pollutant measurements.
 
 ### Provider adapter flow
 
 1. `HazeMonitorClient` performs GET with connect/overall timeouts, TLS verification, `Accept: application/json`, and a fixed allowlisted host.
-2. Cache the entire raw response using a key per endpoint/query. Honor `Cache-Control` directives and `Retry-After`; do not poll ahead of the published TTL. On a transient failure, serve last-known-good data only with its original observation/fetch timestamps and stale label.
+2. Cache each JSON response using a key per endpoint/query. Honor `Cache-Control` directives and `Retry-After`; current and recent-history payloads currently publish `s-maxage=300`. Do not poll ahead of the published TTL. If a successful response omits a reusable freshness lifetime or declares `no-store`/`no-cache`, reject it for ingestion rather than inventing a refresh interval. On a transient failure, serve last-known-good data only with its original observation/fetch timestamps and stale label (stale serving is not part of the first M3 sync command).
 3. Decode JSON and validate required structure/types. Reject malformed top-level data; treat nullable values as missing. Capture safe error code/request ID in sync logs; do not log secrets or full uncontrolled payloads.
 4. `HazeMonitorNormalizer` maps station ID to provider location, maps `api` and `pm10Api` only to confirmed source metrics, retains exact source labels and category, and parses timestamps as UTC.
 5. `DataSyncService` upserts roster, persists available readings transactionally, deduplicates, then marks run success/partial/failure. A failed fetch never overwrites current valid data.
@@ -127,12 +129,13 @@ The live endpoint and schema are accessible, but the documentation browser used 
 | station `id` | `locations.external_id` | Unique within provider; never substitute city name. |
 | `name`, `fullName`, `state`, `region`, coordinates | `locations` and `states` | Preserve provider names; nullable coordinates/state mapping handled without guessing. |
 | `api` | `air_quality_readings.value` with metric `malaysia_api_ipu` | Official DOE index; unit/index scale label stored as `index` only after contract is confirmed; retain category. |
-| `pm10Api` | source-specific metric pending definition | Do not map to `pm10` concentration without provider semantics and unit confirmation. |
+| `pm10Api` | not persisted in M3 | It was null in the sampled roster; never map it to `pm10` concentration without provider semantics and unit confirmation. |
 | `pollutant` | `source_metric`/source metadata | Preserve exact source string; validate known values when mapping; no assumptions. |
 | `category` | `category` | Preserve provider category; no HazeWatch recalculation. |
 | station `observedAt` | `observed_at` | Per station, parse offset and convert UTC; null means unavailable. |
 | snapshot `fetchedAt` | sync log end/fetched timestamp | Retrieval time, distinct from observation time. |
 | error `code`, `requestId` | `api_sync_logs.error_code`, `request_id` | Keep safe diagnostics and run status. |
+| recent-history `stations[].readings[]` | `air_quality_readings` | Hourly API/IPU points normalize to the same metric with per-point UTC timestamps. |
 | history `low`, `high`, `count` | archive payload/aggregate model (future) | Not individual readings; do not insert as raw hourly rows. |
 
 ## 6. Milestones and acceptance gates
@@ -140,7 +143,7 @@ The live endpoint and schema are accessible, but the documentation browser used 
 | Milestone | Deliverable and exit criteria |
 |---|---|
 | M1: project foundation | Composer/autoload/bootstrap, environment config, front controller/router, error handling/logging, README; clean install works and secrets stay out of Git. |
-| M2: schema and persistence | Migrations/seeders, PDO connection, repositories, constraints; migrate/rollback and fixtures work. Confirmed provider roster seeded from provider IDs. |
+| M2: schema and persistence | MySQL migrations/seeders, PDO connection, constraints and commands implemented; database application remains to be confirmed against a running MySQL 8 instance. Base states and provider source are seeded; the confirmed station roster is upserted by M3 sync. |
 | M3: provider ingestion | Captured payload/header fixture, validated client/normalizer/sync command; cache honored, idempotent repeat sync, failure preserves last good record. |
 | M4: public dashboard | Server-rendered current station listing with truthful unavailable/stale states and attribution; search by station/state. |
 | M5: station details/history | Detail pages and Chart.js history; gaps preserved, range supported by provider, timestamps/units labeled. |
@@ -184,7 +187,7 @@ Use PHPUnit only if dependency approval is given; otherwise begin with a small p
 
 ## 9. Decisions and uncertainties requiring confirmation
 
-1. **Display scope:** the confirmed Malaysia endpoint supplies official API/IPU and a `pm10Api` value whose units/meaning need verification. Is the first public release allowed to show official IPU only until a reliable source explicitly exposes PM2.5 and PM10 concentrations?
+1. **Display scope:** the confirmed Malaysia endpoint supplies official API/IPU. The sampled `pm10Api` values were null and its semantics/units remain undocumented. Is the first public release allowed to show official IPU only until a reliable source explicitly exposes PM2.5 and PM10 concentrations?
 2. **Source of truth:** use Haze Monitor's DOE-backed API for the first adapter, with official DOE as the measurement origin. Should OpenAQ or data.gov.my be evaluated only after the first provider adapter, or is a second source required in MVP?
 3. **Historical charts:** the documented API history provides API/IPU observations and month/year aggregates; it does not promise 24-hour/7-day/30-day pollutant-concentration series. Are charts for official API/IPU acceptable where available, with the PRD's pollutant history deferred until concentration data is established?
 4. **Data retention:** proposed schema stores provider observations for trend/alerts. Confirm acceptable retention and whether complete raw response payloads should be discarded after normalization (recommended) or retained in a bounded audit store.
@@ -192,7 +195,7 @@ Use PHPUnit only if dependency approval is given; otherwise begin with a small p
 6. **Location model:** should HazeWatch initially list all currently reporting DOE stations, rather than the ten city names in the PRD (which may not match station locations)?
 7. **Alert metric:** should first alert rules use official API/IPU thresholds only, until pollutant concentration metrics and their units are verified?
 
-Items 1, 3, 6, and 7 determine truthful MVP behavior. Item 5 is a lightweight implementation choice. Cache duration and raw unit semantics remain factual verification gates before M3; no collection interval should be hard-coded before then.
+Items 1, 3, 6, and 7 determine truthful MVP behavior. Item 5 is a lightweight implementation choice. The sampled cache lifetime is five minutes; the sync command uses response headers dynamically and does not define a separate polling schedule.
 
 ## References
 

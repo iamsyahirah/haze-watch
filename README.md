@@ -18,7 +18,7 @@ The project intentionally has no PHP framework and no runtime package dependenci
 4. Start the local PHP server with `php -S 127.0.0.1:8000 -t public`.
 5. Open `http://127.0.0.1:8000`.
 
-The current M1 page is a project shell and does not yet connect to MySQL or display live readings. Database credentials are placeholders until the database milestone.
+The current page is a project shell; the public dashboard does not yet read from MySQL or display live readings.
 
 ## Database setup (M2)
 
@@ -30,6 +30,12 @@ composer db:seed
 ```
 
 To roll back the most recently applied migration in a development database, run `composer db:rollback`. The initial schema includes users, Malaysian states, provider sources, locations, readings, favourites, alert rules, notifications, and sync logs. The reference seeder adds states and the Haze Monitor source only; station rows wait for a captured provider station response so no locations are fabricated. Migration scripts use MySQL DDL, which performs implicit commits; do not treat a multi-table migration as transactionally reversible if an interruption occurs.
+
+## Provider sync (M3)
+
+Run `php bin/sync-air-quality.php` after applying and seeding the schema. The command fetches the current station snapshot and recent hourly history, validates and normalizes official API/IPU values, upserts provider stations/readings, and logs successful or failed syncs. It stores no PM2.5/PM10 concentration from the current response because no concentration field/unit is published there. Provider JSON is cached under `storage/cache/hazemonitor` using its response freshness lifetime; the observed current/history lifetime is five minutes. The command does not install a cron schedule; schedule configuration belongs to a later milestone.
+
+The provider adapters are checked offline with `composer test` against sanitized live response fixtures, so the test command does not contact Haze Monitor.
 
 ## Project documents
 
