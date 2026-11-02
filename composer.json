@@ -1,0 +1,17 @@
+{
+    "name": "hazewatch/app",
+    "description": "Malaysian air quality monitoring and alert system",
+    "type": "project",
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "HazeWatch\\": "app/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    }
+}
